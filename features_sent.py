@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import numpy as np
 from sklearn.feature_extraction.text import CountVectorizer
 
 
-def generate_sentim_features(tweets, embeds):
+def generate_sentim_features(tweets,lex_uni, embeds):
     
     embedding_features = generate_average_embedding_features(tweets, embeds)
+    unigram_lex_features = generate_lexicon_features(tweets, lex_uni, 1)
     
-    return embedding_features
+    return unigram_lex_features, embedding_features
 
 
 def extract_ngram_features(tweets):
