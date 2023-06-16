@@ -1,4 +1,3 @@
-
 import pickle, random
 import numpy as np
 import pandas as pd
@@ -9,7 +8,7 @@ from sklearn.naive_bayes import GaussianNB
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import  make_scorer, f1_score
- 
+from imblearn.metrics import classification_report_imbalanced, geometric_mean_score
 
 from sklearn import preprocessing
 from sklearn.pipeline import Pipeline
@@ -18,7 +17,6 @@ from collections import Counter
 
 from imblearn.pipeline import Pipeline
 from imblearn.over_sampling import SMOTE, BorderlineSMOTE, RandomOverSampler
-from imblearn.metrics import classification_report_imbalanced
 
 from imblearn.datasets import fetch_datasets
 
@@ -27,12 +25,13 @@ import warnings
 warnings.filterwarnings('ignore')
 
 def unbalanced_models(model_name):
+    '''returns the model and its parameters for gridsearch'''
 
     if model_name =='SVM':
-        #Cs = [0.01, 0.1, 1, 10, 100]
+        Cs = [0.01, 0.1, 1, 10, 100]
         kernels=['rbf', 'linear']
         model = SVC(gamma='scale', random_state=0)
-        parameters = { 'kernel': kernels}
+        parameters = { 'C': Cs, 'kernel': kernels}
     if model_name =='GaussianNB':
         var_smooth = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5]
         model =  GaussianNB()
@@ -46,19 +45,24 @@ def unbalanced_models(model_name):
 
 
 def models_oversampling(oversample_type, model_name):
+    '''returns the model and its parameters for gridsearch after applying
+    oversampling techniques (try 1len/2len/3len*X_train_minority)'''
     
     if model_name =='SVM':
         Cs = [0.01, 0.1, 1, 10, 100]
         kernels=['rbf', 'linear']
         model = SVC(gamma='scale', random_state=0, class_weight="balanced")
         if oversample_type == 'smote':
-            pipeline = Pipeline([('sampling', SMOTE(random_state=3, k_neighbors=1)),
+            pipeline = Pipeline([('sampling', SMOTE(random_state=3,
+                                sampling_strategy={1:310})),
                     ('classification', model)])
         if oversample_type == 'borderlinesmote':
-            pipeline = Pipeline([('sampling', BorderlineSMOTE(random_state=3, k_neighbors=1)),
+            pipeline = Pipeline([('sampling', BorderlineSMOTE(random_state=3,
+                                sampling_strategy={1:414})),
                     ('classification', model)])
         if oversample_type == 'oversampler':
-            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3)),
+            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3,
+                                        sampling_strategy={1:414})),
                     ('classification', model)])
         parameters = {'classification__C': Cs, 'classification__kernel': kernels}
   
@@ -66,13 +70,16 @@ def models_oversampling(oversample_type, model_name):
         var_smooth = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5]       
         model = GaussianNB()
         if oversample_type == 'smote':
-            pipeline = Pipeline([('sampling', SMOTE(random_state=3, k_neighbors=1)),
+            pipeline = Pipeline([('sampling', SMOTE(random_state=3, 
+                                sampling_strategy={1:414})),
                     ('classification', model)])
         if oversample_type == 'borderlinesmote':
-            pipeline = Pipeline([('sampling', BorderlineSMOTE(random_state=3, k_neighbors=1)),
+            pipeline = Pipeline([('sampling', BorderlineSMOTE(random_state=3, 
+                                    sampling_strategy={1:414})),
                     ('classification', model)])
         if oversample_type == 'oversampler':
-            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3)),
+            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3,
+                                    sampling_strategy={1:414})),
                     ('classification', model)])
         parameters = {'classification__var_smoothing': var_smooth,
                     }           
@@ -81,14 +88,17 @@ def models_oversampling(oversample_type, model_name):
         model = LogisticRegression(random_state=0,  class_weight="balanced")
         if oversample_type == 'smote':
             pipeline = Pipeline([
-                ('sampling', SMOTE(random_state=3, k_neighbors=1)),
+                ('sampling', SMOTE(random_state=3, 
+                                   sampling_strategy={1:414})),
             ('classification', model)])
         if oversample_type == 'borderlinesmote':
             pipeline = Pipeline([
-                ('sampling', BorderlineSMOTE(random_state=3, k_neighbors=1)),
+                ('sampling', BorderlineSMOTE(random_state=3,
+                            sampling_strategy={1:414})),
             ('classification', model)])
         if oversample_type == 'oversampler':
-            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3)),
+            pipeline = Pipeline([('sampling', RandomOverSampler(random_state=3,
+                                    sampling_strategy={1:414})),
                     ('classification', model)])
         parameters = {'classification__C': Cs}
                       
@@ -96,15 +106,8 @@ def models_oversampling(oversample_type, model_name):
             
 
 def split_dataset(name, X, y, pct=0.8):
-
-    if name == 'webpage':
-        '''combined = list(zip(X, y))
-        random.shuffle(combined)
-        X, y = zip(*combined)
-        X, y =np.array(X), np.array(y)
-        pickle.dump([X, y], open('pickles/webpage_dataset.p', 'wb'))
-        '''
-        X, y = pickle.load(open('pickles/webpage_dataset.p', 'rb'))        
+    '''splits the dataset in train/ test set for the 
+    classification task'''
 
     train_lim = int(pct*len(X))
     X_train = X[:train_lim]
@@ -127,6 +130,9 @@ def get_preds(X_test, y_test, best_model):
     y_pred = best_model.predict(X_test)  
     print('classification report')
     print(classification_report_imbalanced(y_test, y_pred))
+    gmean = geometric_mean_score(y_test, y_pred)
+    f1_macro = f1_score(y_test, y_pred, average='macro')
+    print('gmean is:', gmean, 'f1 macro is:', f1_macro)
     
         
 def train_eval_classifier_unbal(name, X, y):
@@ -135,7 +141,6 @@ def train_eval_classifier_unbal(name, X, y):
     
     X_train, y_train, X_test, y_test = split_dataset(name, X, y)
     models = ['SVM', 'GaussianNB', 'LogR']
-    models = ['SVM']
     scorer = make_scorer(f1_score, average='macro')
 
     for classif in models:
@@ -152,12 +157,12 @@ def train_eval_classifier_unbal(name, X, y):
         get_preds(X_test, y_test, best_model)
     
 
-def train_eval_classifier_smote(name, X, y):
-    '''trains LogR/NB/SVM on training set using SMOTE for class imbalance'''
+def train_eval_classifier_oversampling(name, X, y):
+    '''trains LogR/RF/SVM on training set after oversampling &
+    evaluates on test set'''
     
     X_train, y_train, X_test, y_test = split_dataset(name, X, y)
-    #models = ['GaussianNB', 'LogR']
-    models = [ 'SVM']
+    models = ['GaussianNB', 'LogR', 'SVM']
     
     scorer = make_scorer(f1_score, average='macro')
 
@@ -178,21 +183,22 @@ def train_eval_classifier_smote(name, X, y):
         get_preds(X_test, y_test, best_model)
     
 
+def baseline_tabular_main():
+    datasets = ['arrhythmia','mammography']
+    for name in datasets:
+        print('dataset:', name)
+        dataset = fetch_datasets()[name]
+        # Access the features (X) and labels (y)
+        X = dataset.data
+        y = dataset.target
+        print('counting instances of each class', Counter(y))
+        print("Shape of X:", X.shape)
+        print("Shape of y:", y.shape)
+
+        #train classifiers without oversampling
+        train_eval_classifier_unbal(name, X, y)
+        #train classifiers with SMOTE/ Borderline SMOTE/ Random oversampling
+        train_eval_classifier_oversampling(name, X, y)
 
 
-datasets = ['arrhythmia','mammography', 'webpage' ]
-for name in datasets:
-    print('dataset:', name)
-    dataset = fetch_datasets()[name]
-    # Access the features (X) and labels (y)
-    X = dataset.data
-    y = dataset.target
-    print('counting instances of each class', Counter(y))
-    print("Shape of X:", X.shape)
-    print("Shape of y:", y.shape)
-
-    train_eval_classifier_unbal(name, X, y)
-    train_eval_classifier_smote(name, X, y)
-
-
-
+baseline_tabular_main()
