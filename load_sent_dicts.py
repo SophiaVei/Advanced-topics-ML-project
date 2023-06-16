@@ -47,4 +47,3 @@ def read_file(infile):
 
 '''kbl_uni, embeddings, kbl_bi = load_dicts()
 print(len(kbl_bi))'''
-
