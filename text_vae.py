@@ -18,14 +18,14 @@ from keras import optimizers
 from sklearn.metrics import mean_squared_error,r2_score,\
         mean_absolute_percentage_error, f1_score, make_scorer
 
-from sklearn.metrics import make_scorer
+from sklearn.metrics import make_scorer, f1_score
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 from sklearn.svm import SVC
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 
-from imblearn.metrics import classification_report_imbalanced
-
+from imblearn.metrics import classification_report_imbalanced, geometric_mean_score
 
 
 def get_ae_dataset():
@@ -36,7 +36,12 @@ def get_ae_dataset():
     X_train = X[:int(0.7*len(X))]
     X_val = X[int(0.7*len(X)):int(0.8*len(X))]
 
-    return X_train, X_val
+    noise_pct = 0.05
+    X_train_noise = X_train + (noise_pct*np.random.normal(loc=0.0, scale=1.0, size=X_train.shape))
+    X_val_noise = X_val + (noise_pct*np.random.normal(loc=0.0, scale=1.0, size=X_val.shape))
+
+
+    return X_train, X_train_noise, X_val, X_val_noise
 
 
 
@@ -67,7 +72,9 @@ def train_vae(latent_dim):
     '''trains a variational autoencoder'''
 
     K.clear_session()
-    original_dim = 300
+
+    X_train, X_train_noise, X_val, X_val_noise = get_ae_dataset()
+    original_dim = X_train.shape[1]
 
     # Variational autoencoder model
     inputs = Input(shape=(original_dim,))
@@ -81,7 +88,6 @@ def train_vae(latent_dim):
     print (vae.summary())
 
     # Create the loss function and compile the model
-    # The loss function as defined by paper Kingma
     reconstruction_loss = mse(inputs, decoded)
     kl_loss =  -0.5 * K.sum(1 + x_log_var - K.square(x_mean) -K.exp(x_log_var), axis=-1)
     vae_loss = K.mean(reconstruction_loss + kl_loss)
@@ -90,7 +96,7 @@ def train_vae(latent_dim):
     adam = optimizers.Adam(lr=0.0001)
     vae.compile(optimizer=adam)
 
-    # encoder model (first part of the variotional autoencoder) 
+    # encoder model  
     encoder = Model(inputs, [x_mean, x_log_var, x], name='encoder')
 
     # decoder model 
@@ -98,17 +104,15 @@ def train_vae(latent_dim):
     decoder_layer = vae.layers[4](encoded_input)
     decoder = Model(encoded_input, decoder_layer, name='decoder')
 
-    X_train, X_val = get_ae_dataset()
-
     filepath = 'models/best_vae.h5'
 
     checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=2, 
                                     save_best_only=True)    
     early_stopping_monitor = EarlyStopping(patience=5)
 
-    history = vae.fit(X_train, None,\
+    history = vae.fit(X_train, X_train,\
                 batch_size=16,epochs=300,shuffle=True,verbose=2,\
-                validation_data=(X_val, None), 
+                validation_data=(X_val, X_val), 
                 callbacks=[early_stopping_monitor,checkpoint])
 
     loss = history.history['loss']
@@ -143,87 +147,92 @@ def sentim_models(model_name):
                                     max_iter=5000) 
         Cs = [0.001, 0.01, 0.1, 1, 10, 100, 1000]
         parameters = {'C': Cs}
+    if model_name =='RF':
+        model =  RandomForestClassifier(random_state=0)
+        num_estimators = [100, 200, 300]
+        parameters = {'n_estimators': num_estimators}
 
     return model, parameters
 
 
-def train_eval_classifier_vae(X_train, y_train):
-    '''trains LogR/NB/SVM on training set & evaluate them.
+def train_eval_classifier_vae(classif, X_train, y_train):
+    '''trains LogR/NB/SVM on training set & evaluates them.
     '''
-    
-    models = ['GaussianNB', 'LogR']
             
     scorer = make_scorer(f1_score, average='macro')
+    model, params = sentim_models(classif)
+    
+    '''use RepeatedStratifiedKFold s.t. each fold of the cross-validation split  
+    has the same class distribution as the original dataset'''
+    cv = RepeatedStratifiedKFold(n_splits=3, n_repeats=2, random_state=1)
+    clf = GridSearchCV(model, params, cv= cv, verbose=1, 
+                        scoring=scorer
+                        )
+    best_model = clf.fit(X_train, y_train)
+    print(clf.best_estimator_)
+    y_pred = best_model.predict(X_test)  
+    print('classification report')
+    print(classification_report_imbalanced(y_test, y_pred))
+    gmean = geometric_mean_score(y_test, y_pred)
+    f1_macro = f1_score(y_test, y_pred, average='macro')
 
-    for classif in models:
-        print(classif)
-        model, params = sentim_models(classif)
-        
-        '''use RepeatedStratifiedKFold s.t. each fold of the cross-validation split  
-        has the same class distribution as the original dataset'''
-        cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=1)
-        clf = GridSearchCV(model, params, cv= cv, verbose=1, 
-                           scoring=scorer
-                           )
-        best_model = clf.fit(X_train, y_train)
-        print(clf.best_estimator_)
-        y_pred = best_model.predict(X_test)  
-        print('classification report')
-        print(classification_report_imbalanced(y_test, y_pred))
-     
-      
+    if classif == 'GaussianNB':
+        text_test_set = pickle.load(open('pickles/sentim_text_test.p', 'rb'))
+        text_test_set = np.array(text_test_set)
+        indices = np.where(np.logical_and(y_pred != 'pos', y_test == 'pos'))
+        print(text_test_set[indices])
+
+    return gmean, f1_macro
+    
  
-latent_dim = 256
-#train Variational AE  
-encoder, decoder = train_vae(latent_dim)
-
-filepath = 'models/best_vae.h5'               
-model = load_model(filepath)
-
-#generate data for the minority class
-pos_tweets_train = pickle.load(open('pickles/pos_tweets_train.p', 'rb'))
-synthetic_data = []
-for i in range (1):    
-    generated_data = []
-    for instance in pos_tweets_train:
-        encoded_instance = encoder.predict(instance.reshape(1,300))[2]
-        decoded_instance = decoder.predict(encoded_instance)
-        generated_data.append(decoded_instance)
-    generated_data = np.array(generated_data)
-    generated_data = generated_data.reshape(len(pos_tweets_train), 300)
-    synthetic_data.append(generated_data)
-
-#compute metrics to evaluate the reconstruction
-for instance_set in synthetic_data:
-    mse = mean_squared_error(pos_tweets_train, instance_set)
-    print("MSE:", mse)
-
-    r2 = r2_score(pos_tweets_train, instance_set)
-    print("R-squared:", r2)
-
-#add the generated data to the initial training set
-X = pickle.load(open('pickles/tweets_embeddings.p', 'rb'))
-y = pickle.load(open('pickles/tweets_labels.p', 'rb'))
-X_train, y_train, X_test, y_test = split_train_test_dataset(X, y, pct=0.8)
-X_train_ff_ae = list(X_train) 
-for instance_set in synthetic_data:
-    X_train_ff_ae.extend(instance_set)
-y_train_ff_ae = list(y_train)  
-y_train_ff_ae.extend(['pos'] * (1 * len(synthetic_data[0])))
-print(len(X_train_ff_ae), len(y_train_ff_ae))
-combined = list(zip(X_train_ff_ae, y_train_ff_ae))
-random.shuffle(combined)
-X_train_ff_ae, y_train_ff_ae = zip(*combined)
-X_train_ff_ae, y_train_ff_ae =np.array(X_train_ff_ae), np.array(y_train_ff_ae)
-
-#scale the data
-scaler = MinMaxScaler()
-X_train_ff_ae = scaler.fit_transform(X_train_ff_ae)
-X_test = scaler.transform(X_test)
-
-#train the classifiers anf evaluate
-train_eval_classifier_vae(X_train_ff_ae, y_train_ff_ae)
+def vae_main():
+    '''main function for training VAE for oversampling, train & evaluate the classifiers'''
 
 
+    X = pickle.load(open('pickles/tweets_embeddings.p', 'rb'))
+    y = pickle.load(open('pickles/tweets_labels.p', 'rb'))
+    X_train, y_train, X_test, y_test = split_train_test_dataset(X, y, pct=0.8)
+    X_pos_tr = X_train[y_train == 'pos']
+    print('number of training instances in pos class:', X_pos_tr.shape)
+
+    #instances = [10, 30, 50, 100, 300]
+    instances = [50]
+
+    models = ['SVM', 'GaussianNB', 'LogR']
+
+    for m in models:
+        print(m)
+        gmean_list, f1_macro_list = [], []
+        for i in instances:
+            #train Variational AE  
+            encoder, decoder = train_vae(latent_dim)
+            latent_samples = np.random.normal(size=(i, latent_dim))
+            synthetic_data = decoder.predict(latent_samples)
+
+            #add the generated data to the initial training set
+            X_train_ff_ae = list(X_train)    
+            X_train_ff_ae.extend(synthetic_data)
+            y_train_ff_ae = list(y_train)  
+            y_train_ff_ae.extend(['pos'] * len(synthetic_data))
+            print(len(X_train_ff_ae), len(y_train_ff_ae))
+            combined = list(zip(X_train_ff_ae, y_train_ff_ae))
+            random.shuffle(combined)
+            X_train_ff_ae, y_train_ff_ae = zip(*combined)
+            X_train_ff_ae, y_train_ff_ae =np.array(X_train_ff_ae), np.array(y_train_ff_ae)
+
+            #scale the data
+            scaler = MinMaxScaler()
+            X_train_ff_ae = scaler.fit_transform(X_train_ff_ae)
+            X_test = scaler.transform(X_test)
+
+            #train the classifiers and evaluate
+            gmean, f1_macro = train_eval_classifier_vae(m, X_train_ff_ae, y_train_ff_ae)
+            gmean_list.append(gmean)
+            f1_macro_list.append(f1_macro)
+
+        print('for model ', m, ',values of gmean are', gmean_list)
+        print('for model ', m, ',values of f1 macro are', f1_macro_list)
 
 
+latent_dim = 64
+vae_main()
