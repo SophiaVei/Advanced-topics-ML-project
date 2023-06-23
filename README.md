@@ -1,11 +1,10 @@
-# Advanced-topics-ML-project
+# A Systematic Study of the Class Imbalance Problem in the Era of Deep Learning
 
 The variety of the datasets include tabular, text and image data.  
   
 **Tabular datasets:**  
 - Arrhythmia  
-- Mammography  
-- Webpage  
+- Mammography   
 
 _Models_:
 - VAE  
